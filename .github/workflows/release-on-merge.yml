@@ -1,0 +1,343 @@
+name: Release on PR Merge
+
+on:
+  pull_request:
+    types: [closed]
+  repository_dispatch:
+    types: [trigger-release]
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: 'Force a release build'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  check-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+      pr_title: ${{ steps.check.outputs.pr_title }}
+      pr_author: ${{ steps.check.outputs.pr_author }}
+    steps:
+      - name: Check trigger conditions
+        id: check
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            console.log('Event name:', context.eventName);
+            console.log('Event payload:', JSON.stringify(context.payload, null, 2));
+            
+            let shouldRelease = false;
+            let prNumber = '';
+            let prTitle = '';
+            let prAuthor = '';
+            
+            // Repository dispatch event (from auto-merge workflow)
+            if (context.eventName === 'repository_dispatch') {
+              shouldRelease = true;
+              if (context.payload.client_payload) {
+                prNumber = context.payload.client_payload.pr_number || '';
+                prTitle = context.payload.client_payload.pr_title || '';
+                prAuthor = context.payload.client_payload.pr_author || '';
+              }
+              console.log('Repository dispatch trigger - from auto-merge workflow');
+            }
+            // Manual trigger
+            else if (context.eventName === 'workflow_dispatch') {
+              shouldRelease = '${{ inputs.force_release }}' === 'true';
+              console.log('Manual trigger, force_release:', shouldRelease);
+            }
+            // PR closed event
+            else if (context.eventName === 'pull_request' && context.payload.pull_request) {
+              const pr = context.payload.pull_request;
+              shouldRelease = pr.merged;  // Trigger for any merged PR
+              prNumber = pr.number;
+              prTitle = pr.title;
+              prAuthor = pr.user.login;
+              console.log('PR event - merged:', pr.merged);
+            }
+            
+            core.setOutput('should_release', shouldRelease.toString());
+            core.setOutput('pr_number', prNumber.toString());
+            core.setOutput('pr_title', prTitle);
+            core.setOutput('pr_author', prAuthor);
+            
+            console.log('Decision - should_release:', shouldRelease);
+            
+  release:
+    needs: check-trigger
+    if: needs.check-trigger.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive  # Fetch submodules
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'  # Adjust based on your project's .NET version
+          
+      - name: Create Directory.Build.props
+        run: |
+          cat > Directory.Build.props << 'EOF'
+          <Project>
+              <ItemGroup>
+                  <Reference Include="AEAssist">
+                      <HintPath>./acr_libs/AEAssist.dll</HintPath>
+                      <Private>false</Private>
+                  </Reference>
+                  <Reference Include="Dalamud">
+                      <HintPath>./acr_libs/Dalamud.dll</HintPath>
+                      <Private>false</Private>
+                  </Reference>
+                  <Reference Include="ImGui.NET">
+                      <HintPath>./acr_libs/ImGui.NET.dll</HintPath>
+                      <Private>false</Private>
+                  </Reference>
+                  <Reference Include="ImGuiScene">
+                      <HintPath>./acr_libs/ImGuiScene.dll</HintPath>
+                      <Private>false</Private>
+                  </Reference>
+                  <Reference Include="ECommons">
+                      <HintPath>./acr_libs/ECommons.dll</HintPath>
+                      <Private>false</Private>
+                  </Reference>
+                  <Reference Include="FFXIVClientStructs">
+                      <HintPath>./acr_libs/FFXIVClientStructs.dll</HintPath>
+                      <Private>false</Private>
+                  </Reference>
+                  <Reference Include="Lumina">
+                      <HintPath>./acr_libs/Lumina.dll</HintPath>
+                      <Private>false</Private>
+                  </Reference>
+                  <Reference Include="Lumina.Excel">
+                      <HintPath>./acr_libs/Lumina.Excel.dll</HintPath>
+                      <Private>false</Private>
+                  </Reference>
+              </ItemGroup>
+          </Project>
+          EOF
+          echo "Directory.Build.props created:"
+          cat Directory.Build.props
+          
+      - name: Get latest release version
+        id: get-version
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              // Get latest release
+              const { data: latestRelease } = await github.rest.repos.getLatestRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              
+              let version = latestRelease.tag_name.replace('v', '');
+              console.log(`Latest version: ${version}`);
+              
+              // Parse version parts
+              let [major, minor, patch] = version.split('.').map(Number);
+              
+              // Increment patch by 1 (every 10 patches increment minor)
+              patch++;
+              if (patch >= 10) {
+                patch = 0;
+                minor++;
+                if (minor >= 10) {
+                  minor = 0;
+                  major++;
+                }
+              }
+              
+              const newVersion = `${major}.${minor}.${patch}`;
+              console.log(`New version: ${newVersion}`);
+              
+              core.setOutput('version', newVersion);
+              core.setOutput('version_tag', `v${newVersion}`);
+              
+            } catch (error) {
+              // If no releases exist, start with v1.0.0
+              console.log('No previous releases found, starting with v1.0.0');
+              core.setOutput('version', '1.0.0');
+              core.setOutput('version_tag', 'v1.0.0');
+            }
+            
+      - name: Verify submodule
+        run: |
+          echo "Checking acr_libs submodule:"
+          if [ -d "acr_libs" ]; then
+            echo "✅ acr_libs directory found"
+            ls -la acr_libs/
+            
+            # Check for all required DLL files
+            required_dlls=("AEAssist.dll" "Dalamud.dll" "ImGui.NET.dll" "ImGuiScene.dll" "ECommons.dll" "FFXIVClientStructs.dll" "Lumina.dll" "Lumina.Excel.dll")
+            missing_dlls=()
+            
+            for dll in "${required_dlls[@]}"; do
+              if [ -f "acr_libs/$dll" ]; then
+                echo "✅ $dll found"
+              else
+                echo "❌ $dll not found in acr_libs"
+                missing_dlls+=("$dll")
+              fi
+            done
+            
+            if [ ${#missing_dlls[@]} -gt 0 ]; then
+              echo "Missing DLL files: ${missing_dlls[*]}"
+              exit 1
+            fi
+          else
+            echo "❌ acr_libs directory not found"
+            exit 1
+          fi
+          
+      - name: Restore dependencies
+        run: dotnet restore
+        
+      - name: Build project
+        run: |
+          echo "Building project version ${{ steps.get-version.outputs.version }}..."
+          # Build with CI flag to use NuGet package instead of local installation
+          dotnet build --configuration Release --no-restore /p:CI=true
+          
+      - name: Publish project
+        run: |
+          echo "Publishing project..."
+          dotnet publish -c Release -o ./publish --no-build /p:CI=true
+          
+      - name: List published files
+        run: |
+          echo "Published files:"
+          ls -la ./publish/
+          
+      - name: Create deployment package
+        run: |
+          cd publish
+          zip -r ../${{ github.event.repository.name }}.zip .
+          cd ..
+          echo "Package created: ${{ github.event.repository.name }}.zip"
+          ls -lh ${{ github.event.repository.name }}.zip
+          
+      - name: Generate release notes
+        id: release-notes
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Get PR info from the check-trigger job
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const prTitle = '${{ needs.check-trigger.outputs.pr_title }}';
+            const prAuthor = '${{ needs.check-trigger.outputs.pr_author }}';
+            let releaseNotes = `## 🎉 Release ${{ steps.get-version.outputs.version }}\n\n`;
+            core.setOutput('notes', releaseNotes);
+            
+      - name: Create GitHub Release
+        id: create-release
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            
+            // Create the release
+            const { data: release } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: '${{ steps.get-version.outputs.version_tag }}',
+              name: 'Release ${{ steps.get-version.outputs.version }}',
+              body: ${{ toJSON(steps.release-notes.outputs.notes) }},
+              draft: false,
+              prerelease: false,
+              target_commitish: context.sha
+            });
+            
+            console.log(`Release created: ${release.html_url}`);
+            
+            // Upload the zip file
+            const zipPath = `${{ github.event.repository.name }}.zip`;
+            const zipContent = fs.readFileSync(zipPath);
+            
+            const { data: asset } = await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: `${{ github.event.repository.name }}.zip`,
+              data: zipContent,
+              headers: {
+                'content-type': 'application/zip',
+                'content-length': zipContent.length
+              }
+            });
+            
+            console.log(`Asset uploaded: ${asset.browser_download_url}`);
+            core.setOutput('release_url', release.html_url);
+            core.setOutput('download_url', asset.browser_download_url);
+            
+      - name: Setup Go
+        if: steps.create-release.outputs.download_url != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          
+      - name: Checkout Acr_Upload repository
+        if: steps.create-release.outputs.download_url != ''
+        uses: actions/checkout@v4
+        with:
+          repository: aeassist-acr/Acr_Upload
+          ref: master
+          token: ${{ secrets.ACR_UPLOAD }}
+          path: upload_repo
+          
+      - name: Build and run upload program
+        if: steps.create-release.outputs.download_url != ''
+        run: |
+          echo "Building upload program..."
+          cd upload_repo
+          chmod +x build.sh
+          ./build.sh
+          
+          echo "Executing upload program..."
+          ./upload \
+            -code="${{ secrets.ACR_CODE }}" \
+            -author="${{ github.event.repository.name }}" \
+            -acr="${{ github.workspace }}/${{ github.event.repository.name }}.zip" \
+            -config="${{ github.workspace }}/upload_config.yaml"
+          
+          echo "Upload completed successfully"
+          cd ..
+          rm -rf upload_repo
+          
+      - name: Comment on PR with release info
+        if: needs.check-trigger.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const comment = `## 🚀 Release Published!\n\n` +
+              `A new release has been automatically created from this PR:\n\n` +
+              `- **Version:** ${{ steps.get-version.outputs.version_tag }}\n` +
+              `- **Release URL:** ${{ steps.create-release.outputs.release_url }}\n` +
+              `- **Download:** ${{ steps.create-release.outputs.download_url }}\n\n` +
+              `Thank you for your contribution! 🎉`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: comment
+            });
