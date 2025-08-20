@@ -1,0 +1,4 @@
+[submodule "acr_libs"]
+	path = acr_libs
+	url = git@github.com:aeassist-acr/acr_libs.git
+	branch = master
