@@ -11,6 +11,10 @@ on:
         description: 'Force a release build'
         required: false
         default: 'true'
+      pr_number:
+        description: 'PR number to comment on (e.g., #4 or 4)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -53,6 +57,29 @@ jobs:
             // Manual trigger
             else if (context.eventName === 'workflow_dispatch') {
               shouldRelease = '${{ inputs.force_release }}' === 'true';
+              
+              // Extract PR number from manual input
+              const manualPrInput = '${{ inputs.pr_number }}';
+              if (manualPrInput) {
+                // Remove # if present and extract number
+                prNumber = manualPrInput.replace('#', '').trim();
+                if (prNumber) {
+                  // Fetch PR details
+                  try {
+                    const { data: pr } = await github.rest.pulls.get({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: parseInt(prNumber)
+                    });
+                    prTitle = pr.title;
+                    prAuthor = pr.user.login;
+                    console.log(`Manual trigger with PR #${prNumber}: ${prTitle}`);
+                  } catch (error) {
+                    console.log(`Could not fetch PR #${prNumber} details:`, error.message);
+                    // Continue without PR details
+                  }
+                }
+              }
               console.log('Manual trigger, force_release:', shouldRelease);
             }
             // PR closed event
@@ -78,6 +105,23 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      - name: Comment on PR - Build Starting
+        if: needs.check-trigger.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const comment = `## 🔨 正在自动编译并发布\n\n` +
+              `构建已开始，请稍等片刻...`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: comment
+            });
+            
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -86,9 +130,27 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           
       - name: Setup .NET
+        id: setup-dotnet
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'  # Adjust based on your project's .NET version
+        continue-on-error: true
+          
+      - name: Check Setup .NET Status
+        if: steps.setup-dotnet.outcome == 'failure' && needs.check-trigger.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const errorMessage = `## ❌ 构建失败\n\n**错误步骤:** Setup .NET\n\n**错误信息:** .NET SDK 安装失败\n\n请检查环境配置或重试。`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: errorMessage
+            });
+            throw new Error('.NET Setup failed');
           
       - name: Create Directory.Build.props
         run: |
@@ -177,6 +239,8 @@ jobs:
             }
             
       - name: Verify submodule
+        id: verify-submodule
+        continue-on-error: true
         run: |
           echo "Checking acr_libs submodule:"
           if [ -d "acr_libs" ]; then
@@ -205,19 +269,89 @@ jobs:
             exit 1
           fi
           
+      - name: Check Verify Submodule Status
+        if: steps.verify-submodule.outcome == 'failure' && needs.check-trigger.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const errorMessage = `## ❌ 构建失败\n\n**错误步骤:** Verify submodule\n\n**错误信息:** 子模块验证失败，缺少必要的 DLL 文件\n\n请确保 acr_libs 子模块已正确初始化并包含所有必需的文件。`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: errorMessage
+            });
+            throw new Error('Submodule verification failed');
+            
       - name: Restore dependencies
+        id: restore-deps
+        continue-on-error: true
         run: dotnet restore
         
+      - name: Check Restore Dependencies Status
+        if: steps.restore-deps.outcome == 'failure' && needs.check-trigger.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const errorMessage = `## ❌ 构建失败\n\n**错误步骤:** Restore dependencies\n\n**错误信息:** NuGet 包恢复失败\n\n请检查项目文件和 NuGet 配置。`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: errorMessage
+            });
+            throw new Error('Dependencies restore failed');
+        
       - name: Build project
+        id: build-project
+        continue-on-error: true
         run: |
           echo "Building project version ${{ steps.get-version.outputs.version }}..."
           # Build with CI flag to use NuGet package instead of local installation
           dotnet build --configuration Release --no-restore /p:CI=true
           
+      - name: Check Build Status
+        if: steps.build-project.outcome == 'failure' && needs.check-trigger.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const errorMessage = `## ❌ 构建失败\n\n**错误步骤:** Build project\n\n**错误信息:** 项目编译失败\n\n请检查代码是否存在编译错误。`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: errorMessage
+            });
+            throw new Error('Project build failed');
+          
       - name: Publish project
+        id: publish-project
+        continue-on-error: true
         run: |
           echo "Publishing project..."
           dotnet publish -c Release -o ./publish --no-build /p:CI=true
+          
+      - name: Check Publish Status
+        if: steps.publish-project.outcome == 'failure' && needs.check-trigger.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const errorMessage = `## ❌ 构建失败\n\n**错误步骤:** Publish project\n\n**错误信息:** 项目发布失败\n\n请检查发布配置。`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: errorMessage
+            });
+            throw new Error('Project publish failed');
           
       - name: List published files
         run: |
@@ -225,12 +359,30 @@ jobs:
           ls -la ./publish/
           
       - name: Create deployment package
+        id: create-package
+        continue-on-error: true
         run: |
           cd publish
           zip -r ../${{ github.event.repository.name }}.zip .
           cd ..
           echo "Package created: ${{ github.event.repository.name }}.zip"
           ls -lh ${{ github.event.repository.name }}.zip
+          
+      - name: Check Package Creation Status
+        if: steps.create-package.outcome == 'failure' && needs.check-trigger.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const errorMessage = `## ❌ 构建失败\n\n**错误步骤:** Create deployment package\n\n**错误信息:** 部署包创建失败\n\n请检查发布输出文件。`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: errorMessage
+            });
+            throw new Error('Package creation failed');
           
       - name: Generate release notes
         id: release-notes
@@ -247,6 +399,7 @@ jobs:
             
       - name: Create GitHub Release
         id: create-release
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -287,6 +440,22 @@ jobs:
             core.setOutput('release_url', release.html_url);
             core.setOutput('download_url', asset.browser_download_url);
             
+      - name: Check Release Creation Status
+        if: steps.create-release.outcome == 'failure' && needs.check-trigger.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const errorMessage = `## ❌ 构建失败\n\n**错误步骤:** Create GitHub Release\n\n**错误信息:** GitHub Release 创建失败\n\n请检查仓库权限和 Release 配置。`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: errorMessage
+            });
+            throw new Error('Release creation failed');
+            
       - name: Setup Go
         if: steps.create-release.outputs.download_url != ''
         uses: actions/setup-go@v5
@@ -303,7 +472,9 @@ jobs:
           path: upload_repo
           
       - name: Build and run upload program
+        id: upload-program
         if: steps.create-release.outputs.download_url != ''
+        continue-on-error: true
         run: |
           echo "Building upload program..."
           cd upload_repo
@@ -320,6 +491,22 @@ jobs:
           echo "Upload completed successfully"
           cd ..
           rm -rf upload_repo
+          
+      - name: Check Upload Status
+        if: steps.upload-program.outcome == 'failure' && needs.check-trigger.outputs.pr_number != '' && steps.create-release.outputs.download_url != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = '${{ needs.check-trigger.outputs.pr_number }}';
+            const errorMessage = `## ⚠️ 发布部分成功，但上传失败\n\n**错误步骤:** Upload to ACR\n\n**错误信息:** ACR 上传失败\n\nGitHub Release 已成功创建，但上传到 ACR 失败。请检查上传配置。\n\n**Release URL:** ${{ steps.create-release.outputs.release_url }}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber),
+              body: errorMessage
+            });
+            // Note: Don't throw error here to allow the workflow to continue
           
       - name: Comment on PR with release info
         if: needs.check-trigger.outputs.pr_number != ''
