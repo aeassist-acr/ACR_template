@@ -5,8 +5,8 @@ SupportJobs:
   - 白魔法师
   - 黑魔法师
 #支持链接
-SupportUrl: https://exam.exam.com
+SupportUrl: 改成一个HTTP://或者HTTPS://开头的链接
 #问题反馈链接
-ReportUrl: https://exam.exam.com
+ReportUrl: 改成一个HTTP://或者HTTPS://开头的链接
 #是否国际服版本
 EnVersion: false
