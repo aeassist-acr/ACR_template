@@ -48,7 +48,6 @@ public class DRKRotationEntry : IRotationEntry
         new SlotResolverData(new Ability_深恶痛绝(), SlotMode.Always),
         new SlotResolverData(new DK_Always_M7S(), SlotMode.Always),
         
-        
         new SlotResolverData(new Ability_行尸走肉(), SlotMode.OffGcd),
         new SlotResolverData(new Ability_暗影墙(), SlotMode.OffGcd),
         new SlotResolverData(new Ability_铁壁(), SlotMode.OffGcd),
