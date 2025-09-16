@@ -10,6 +10,7 @@
 		<CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <AssemblyName>44451516</AssemblyName>
+        <RootNamespace>temp</RootNamespace>
     </PropertyGroup>
 
     <PropertyGroup>
