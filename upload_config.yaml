@@ -1,12 +1,13 @@
 #ACR介绍
-Remark: 这是一个ACR介绍
+Remark: 占星是亲信用的
 #支持的职业
 SupportJobs:
-  - 白魔法师
-  - 黑魔法师
+  - 骑士
+  - 暗黑骑士
+  - 占星术士
 #支持链接
-SupportUrl: 改成一个HTTP://或者HTTPS://开头的链接
+SupportUrl: https://love.alipay.com/donate/index.htm
 #问题反馈链接
-ReportUrl: 改成一个HTTP://或者HTTPS://开头的链接
+ReportUrl:  https://discord.com/channels/1191648233454313482/1297967779386888252
 #是否国际服版本
 EnVersion: false

@@ -8,6 +8,8 @@
         <AssemblyName>temp</AssemblyName>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AssemblyName>44451516</AssemblyName>
     </PropertyGroup>
 
     <PropertyGroup>
@@ -17,7 +19,7 @@
 
     
     <ItemGroup>
-        <PackageReference Include="AEAssist.NET" Version="*" ExcludeAssets="runtime" />
+        <PackageReference Include="AEAssist.EN.NET" Version="*" ExcludeAssets="runtime" />
     </ItemGroup>
 
 </Project>

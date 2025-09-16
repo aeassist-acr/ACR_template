@@ -1,0 +1,58 @@
+﻿using System.Numerics;
+using AE_ACR.PLD.SlotResolvers;
+using AE_ACR.utils;
+using AEAssist;
+using AEAssist.CombatRoutine;
+using AEAssist.CombatRoutine.Module;
+using AEAssist.CombatRoutine.Module.AILoop;
+using AEAssist.CombatRoutine.View.JobView;
+using AEAssist.Helper;
+using AEAssist.MemoryApi;
+using Dalamud.Interface.Textures.TextureWraps;
+using Dalamud.Bindings.ImGui;
+
+namespace AE_ACR.PLD.HotKey;
+
+public class HotkeyResolver_干预Pm2:IHotkeyResolver
+{
+    public void Draw(Vector2 size)
+    {
+
+        var iconSize = size * 0.8f;
+        //技能图标
+        ImGui.SetCursorPos(size * 0.1f);
+        if (Core.Resolve<MemApiIcon>().GetActionTexture(PLDBaseSlotResolvers.干预, out IDalamudTextureWrap? textureWrap))
+        {
+            if (textureWrap != null)
+                ImGui.Image(textureWrap.Handle, iconSize);
+        }
+    }
+
+
+    public void DrawExternal(Vector2 size, bool isActive)
+    {
+        Spell spell = new Spell(PLDBaseSlotResolvers.干预.GetSpell().Id, SpellTargetType.Pm2);
+        UIHelp.DrawSpellNormal(spell, size, isActive);
+    }
+
+    public int Check()
+    {
+        if (PLDBaseSlotResolvers.干预.IsUnlockWithCDCheck())
+        {
+            return 0;
+        }
+        
+        return -1;
+    }
+
+    public void Run()
+    {
+        if (PLDBaseSlotResolvers.干预.IsUnlockWithCDCheck())
+        {
+            var slot = new Slot();
+            Spell spell = new Spell(PLDBaseSlotResolvers.干预.GetSpell().Id, SpellTargetType.Pm2);
+            slot.Add(spell);
+            slot.Run(AI.Instance.BattleData, false);
+        }
+    }
+}
